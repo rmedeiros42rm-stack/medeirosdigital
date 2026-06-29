@@ -10,9 +10,24 @@ exports.handler = async function(event) {
     return { statusCode: 200, headers, body: "{}" };
   }
 
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: "Método não permitido." }) };
-  }
+  if (event.httpMethod === "GET") {
+  return {
+    statusCode: 200,
+    headers,
+    body: JSON.stringify({
+      ok: true,
+      message: "Função online."
+    })
+  };
+}
+
+if (event.httpMethod !== "POST") {
+  return {
+    statusCode: 405,
+    headers,
+    body: JSON.stringify({ error: "Método não permitido." })
+  };
+}
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
