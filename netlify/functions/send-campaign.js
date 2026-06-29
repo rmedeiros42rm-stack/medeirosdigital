@@ -6,63 +6,65 @@ exports.handler = async function(event) {
     'Content-Type': 'application/json; charset=utf-8'
   };
 
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '{}' };
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Método não permitido.' }) };
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true }) };
+  }
+
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Método não permitido' }) };
+  }
 
   const apiKey = process.env.RESEND_API_KEY;
+
   if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: 'RESEND_API_KEY não configurada.' })
-    };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: 'RESEND_API_KEY não configurada' }) };
   }
 
   try {
     const body = JSON.parse(event.body || '{}');
-    const { emails, subject, html, from } = body;
 
-    if (!emails || !Array.isArray(emails) || emails.length === 0) {
-      return {
-        statusCode: 400,
-        headers,
-        body: JSON.stringify({ error: 'Lista de e-mails inválida.' })
-      };
+    const subject = body.subject || 'Mensagem da Medeiros Digital';
+    const message = body.message || body.html || '';
+    const recipients = Array.isArray(body.recipients) ? body.recipients : [];
+
+    const emails = recipients
+      .map(r => typeof r === 'string' ? r : r.email)
+      .filter(Boolean);
+
+    if (!emails.length) {
+      return { statusCode: 400, headers, body: JSON.stringify({ error: 'Nenhum e-mail recebido' }) };
     }
 
-    const results = [];
+    let sent = 0;
+    let failed = 0;
 
     for (const email of emails) {
-      const response = await fetch('https://api.resend.com/emails', {
+      const resp = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          from: from || 'Medeiros Digital <onboarding@resend.dev>',
-          to: email,
+          from: 'Medeiros Digital <onboarding@resend.dev>',
+          to: [email],
           subject,
-          html
+          html: `<div style="font-family:Arial,sans-serif;line-height:1.6">${String(message).replace(/\n/g, '<br>')}</div>`
         })
       });
 
-      const data = await response.json();
-
-      results.push({
-        email,
-        status: response.status,
-        data
-      });
+      if (resp.ok) sent++;
+      else failed++;
     }
 
     return {
       statusCode: 200,
       headers,
       body: JSON.stringify({
-        success: true,
-        sent: results.length,
-        results
+        ok: true,
+        sent,
+        delivered: sent,
+        failed
       })
     };
 
@@ -70,9 +72,7 @@ exports.handler = async function(event) {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({
-        error: err.message
-      })
+      body: JSON.stringify({ error: err.message || 'Erro interno' })
     };
   }
 };
