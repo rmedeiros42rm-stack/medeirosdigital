@@ -2,7 +2,7 @@ exports.handler = async function(event) {
   const headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
     "Content-Type": "application/json; charset=utf-8"
   };
 
@@ -11,23 +11,23 @@ exports.handler = async function(event) {
   }
 
   if (event.httpMethod === "GET") {
-  return {
-    statusCode: 200,
-    headers,
-    body: JSON.stringify({
-      ok: true,
-      message: "Função online."
-    })
-  };
-}
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({
+        ok: true,
+        message: "Função search-businesses online. Use POST para buscar empresas."
+      })
+    };
+  }
 
-if (event.httpMethod !== "POST") {
-  return {
-    statusCode: 405,
-    headers,
-    body: JSON.stringify({ error: "Método não permitido." })
-  };
-}
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      headers,
+      body: JSON.stringify({ error: "Método não permitido." })
+    };
+  }
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
 
@@ -35,7 +35,9 @@ if (event.httpMethod !== "POST") {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: "GOOGLE_MAPS_API_KEY não configurada no Netlify." })
+      body: JSON.stringify({
+        error: "GOOGLE_MAPS_API_KEY não configurada no Netlify."
+      })
     };
   }
 
@@ -45,61 +47,69 @@ if (event.httpMethod !== "POST") {
     const segmento = body.segmento || body.category || "empresas";
     const cidade = body.cidade || body.city || "Recife";
     const estado = body.estado || body.state || "";
-    const quantidade = Math.min(Number(body.quantidade || body.qtd || 20), 40);
+    const quantidade = Math.min(Number(body.quantidade || body.qtd || 10), 20);
 
     const busca = `${segmento} em ${cidade} ${estado}`.trim();
 
-    const searchUrl =
-      "https://maps.googleapis.com/maps/api/place/textsearch/json?query=" +
-      encodeURIComponent(busca) +
-      "&language=pt-BR&region=br&key=" +
-      apiKey;
+    const resp = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": [
+          "places.id",
+          "places.displayName",
+          "places.formattedAddress",
+          "places.nationalPhoneNumber",
+          "places.internationalPhoneNumber",
+          "places.websiteUri",
+          "places.googleMapsUri",
+          "places.businessStatus",
+          "places.types"
+        ].join(",")
+      },
+      body: JSON.stringify({
+        textQuery: busca,
+        languageCode: "pt-BR",
+        regionCode: "BR",
+        maxResultCount: quantidade
+      })
+    });
 
-    const searchResp = await fetch(searchUrl);
-    const searchData = await searchResp.json();
+    const data = await resp.json().catch(() => ({}));
 
-    if (!searchResp.ok || searchData.status === "REQUEST_DENIED") {
+    if (!resp.ok) {
       return {
-        statusCode: 500,
+        statusCode: resp.status,
         headers,
         body: JSON.stringify({
-          error: "Erro na API do Google Maps.",
-          details: searchData.error_message || searchData.status
+          error: "Erro na Places API (New).",
+          details: data.error?.message || data
         })
       };
     }
 
-    const results = searchData.results || [];
-    const empresas = [];
+    const places = data.places || [];
 
-    for (const place of results.slice(0, quantidade)) {
-      const detailsUrl =
-        "https://maps.googleapis.com/maps/api/place/details/json?place_id=" +
-        encodeURIComponent(place.place_id) +
-        "&language=pt-BR&fields=name,formatted_address,formatted_phone_number,international_phone_number,website,url,business_status,types&key=" +
-        apiKey;
+    const empresas = places
+      .map((p) => {
+        const nome = p.displayName?.text || "";
+        const site = p.websiteUri || "";
 
-      const detailsResp = await fetch(detailsUrl);
-      const detailsData = await detailsResp.json();
-      const d = detailsData.result || {};
-
-      const temSite = !!d.website;
-
-      if (!temSite) {
-        empresas.push({
-          empresa: d.name || place.name || "",
+        return {
+          empresa: nome,
           segmento,
           cidade,
           estado,
-          endereco: d.formatted_address || place.formatted_address || "",
-          telefone: d.formatted_phone_number || d.international_phone_number || "",
-          site: "",
-          google_maps: d.url || "",
-          status: "Sem site",
-          place_id: place.place_id
-        });
-      }
-    }
+          endereco: p.formattedAddress || "",
+          telefone: p.nationalPhoneNumber || p.internationalPhoneNumber || "",
+          site,
+          google_maps: p.googleMapsUri || "",
+          status: site ? "Com site" : "Sem site",
+          place_id: p.id || ""
+        };
+      })
+      .filter((e) => !e.site);
 
     return {
       statusCode: 200,
@@ -107,7 +117,7 @@ if (event.httpMethod !== "POST") {
       body: JSON.stringify({
         ok: true,
         busca,
-        total_encontradas: results.length,
+        total_encontradas: places.length,
         sem_site: empresas.length,
         empresas
       })
