@@ -1,119 +1,103 @@
 exports.handler = async function(event) {
   const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Content-Type': 'application/json; charset=utf-8'
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Content-Type": "application/json; charset=utf-8"
   };
 
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '{}' };
-  if (event.httpMethod !== 'POST') return { statusCode: 405, headers, body: JSON.stringify({ error: 'Método não permitido.' }) };
+  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "{}" };
+
+  if (event.httpMethod === "GET") {
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: "Função send-campaign online. Use POST para enviar e-mails." }) };
+  }
+
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, headers, body: JSON.stringify({ error: "Método não permitido." }) };
+  }
 
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return { statusCode: 500, headers, body: JSON.stringify({ error: 'RESEND_API_KEY não configurada no Netlify.' }) };
-
-  let data;
-  try { data = JSON.parse(event.body || '{}'); }
-  catch { return { statusCode: 400, headers, body: JSON.stringify({ error: 'JSON inválido.' }) }; }
-
-  const subject = String(data.subject || '').trim();
-  const message = String(data.message || '').trim();
-  const recipients = Array.isArray(data.recipients) ? data.recipients : [];
-
-  const cleanRecipients = recipients
-    .map(r => ({
-      email: String(r.email || '').trim().toLowerCase(),
-      name: String(r.empresa || r.nome || 'Sua empresa').trim()
-    }))
-    .filter(r => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email));
-
-  const unique = [];
-  const seen = new Set();
-
-  for (const r of cleanRecipients) {
-    if (!seen.has(r.email)) {
-      seen.add(r.email);
-      unique.push(r);
-    }
+  if (!apiKey) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "RESEND_API_KEY não configurada no Netlify." }) };
   }
 
-  if (!subject || !message) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Assunto e mensagem são obrigatórios.' }) };
-  }
+  try {
+    const data = JSON.parse(event.body || "{}");
+    const subject = String(data.subject || data.assunto || "").trim();
+    const message = String(data.message || data.mensagem || "").trim();
+    const recipientsRaw = Array.isArray(data.recipients) ? data.recipients : [];
+    const from = String(data.from || process.env.RESEND_FROM_EMAIL || "Medeiros Digital <contato@medeirosdigital.com>").trim();
 
-  if (!unique.length) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Nenhum e-mail válido encontrado.' }) };
-  }
+    const recipients = recipientsRaw
+      .map(r => typeof r === "string" ? { email: r, empresa: "" } : r)
+      .map(r => ({
+        email: String(r.email || "").trim().toLowerCase(),
+        empresa: String(r.empresa || r.nome || "sua empresa").trim()
+      }))
+      .filter(r => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email));
 
-  if (unique.length > 200) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'Limite de 200 destinatários por envio.' }) };
-  }
+    if (!subject) return { statusCode: 400, headers, body: JSON.stringify({ error: "Assunto obrigatório." }) };
+    if (!message) return { statusCode: 400, headers, body: JSON.stringify({ error: "Mensagem obrigatória." }) };
+    if (!recipients.length) return { statusCode: 400, headers, body: JSON.stringify({ error: "Nenhum e-mail válido informado." }) };
 
-  const escapeHtml = (value) =>
-    String(value || '').replace(/[&<>"']/g, c => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#039;'
-    }[c]));
+    let sent = 0;
+    let failed = 0;
+    const results = [];
 
-  let sent = 0;
-  let failed = 0;
-  const errors = [];
+    for (const r of recipients) {
+      const personalized = message
+        .replaceAll("{{empresa}}", r.empresa || "sua empresa")
+        .replaceAll("[LINK_DO_SITE]", "https://medeirosdigital.com");
 
-  for (const r of unique) {
-    const empresa = r.name || 'Sua empresa';
+      const html = `
+        <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827;font-size:15px">
+          ${personalized.split("\n").map(line => `<p>${escapeHtml(line) || "&nbsp;"}</p>`).join("")}
+          <hr style="border:0;border-top:1px solid #e5e7eb;margin:22px 0">
+          <p style="color:#6b7280;font-size:12px">
+            Medeiros Digital<br>
+            Você recebeu este contato porque seu e-mail foi informado ou consta publicamente como contato comercial.
+          </p>
+        </div>`;
 
-    const personalizedMessage = message
-      .replaceAll('{{empresa}}', empresa)
-      .replaceAll('{{site}}', 'https://medeirosdigital.com')
-      .replaceAll('{{whatsapp}}', 'https://wa.me/5587988689626')
-      .replaceAll('{{email}}', r.email);
-
-    const htmlMessage = escapeHtml(personalizedMessage).replace(/\n/g, '<br>');
-
-    const payload = {
-      from: 'Medeiros Digital <contato@medeirosdigital.com>',
-      to: [r.email],
-      subject,
-      html: `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#111"><p>${htmlMessage}</p><hr><p style="font-size:12px;color:#666">Medeiros Digital<br>Você recebeu este contato porque seu e-mail foi informado ou consta publicamente como contato comercial.</p></div>`,
-      text: personalizedMessage + '\n\nMedeiros Digital'
-    };
-
-    try {
-      const resp = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!resp.ok) {
-        const body = await resp.text();
+      try {
+        const resp = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from,
+            to: [r.email],
+            subject,
+            html
+          })
+        });
+        const result = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          failed++;
+          results.push({ email: r.email, ok: false, error: result.message || result.error || result });
+        } else {
+          sent++;
+          results.push({ email: r.email, ok: true, id: result.id || "" });
+        }
+      } catch (err) {
         failed++;
-        errors.push({ email: r.email, error: body.slice(0, 250) });
-      } else {
-        sent++;
+        results.push({ email: r.email, ok: false, error: err.message });
       }
-    } catch (err) {
-      failed++;
-      errors.push({ email: r.email, error: String(err.message || err).slice(0, 250) });
     }
-  }
 
-  return {
-    statusCode: 200,
-    headers,
-    body: JSON.stringify({
-      ok: true,
-      total: unique.length,
-      sent,
-      failed,
-      delivered: sent,
-      errors: errors.slice(0, 10)
-    })
-  };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, sent, failed, results }) };
+  } catch (err) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "Erro interno ao enviar campanha.", details: err.message }) };
+  }
 };
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
