@@ -6,52 +6,30 @@ exports.handler = async function(event) {
     "Content-Type": "application/json; charset=utf-8"
   };
 
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers, body: "{}" };
-  }
+  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "{}" };
 
   if (event.httpMethod === "GET") {
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        ok: true,
-        message: "Função search-businesses online. Use POST para buscar empresas."
-      })
-    };
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: "Função search-businesses online. Use POST para buscar empresas reais no Google Maps." }) };
   }
 
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers,
-      body: JSON.stringify({ error: "Método não permitido." })
-    };
+    return { statusCode: 405, headers, body: JSON.stringify({ error: "Método não permitido." }) };
   }
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-
   if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({
-        error: "GOOGLE_MAPS_API_KEY não configurada no Netlify."
-      })
-    };
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "GOOGLE_MAPS_API_KEY não configurada no Netlify." }) };
   }
 
   try {
     const body = JSON.parse(event.body || "{}");
-
-    const segmento = body.segmento || body.category || "empresas";
-    const cidade = body.cidade || body.city || "Recife";
-    const estado = body.estado || body.state || "";
-    const quantidade = Math.min(Number(body.quantidade || body.qtd || 10), 20);
-
+    const segmento = String(body.segmento || body.category || "empresas").trim();
+    const cidade = String(body.cidade || body.city || "Recife").trim();
+    const estado = String(body.estado || body.state || "PE").trim();
+    const quantidade = Math.max(1, Math.min(Number(body.quantidade || body.qtd || 12), 20));
     const busca = `${segmento} em ${cidade} ${estado}`.trim();
 
-    const resp = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    const googleResp = await fetch("https://places.googleapis.com/v1/places:searchText", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -76,40 +54,42 @@ exports.handler = async function(event) {
       })
     });
 
-    const data = await resp.json().catch(() => ({}));
+    const data = await googleResp.json().catch(() => ({}));
 
-    if (!resp.ok) {
+    if (!googleResp.ok) {
       return {
-        statusCode: resp.status,
+        statusCode: googleResp.status,
         headers,
         body: JSON.stringify({
-          error: "Erro na Places API (New).",
+          error: "Erro na Places API.",
           details: data.error?.message || data
         })
       };
     }
 
-    const places = data.places || [];
+    const places = Array.isArray(data.places) ? data.places : [];
 
-    const empresas = places
-      .map((p) => {
-        const nome = p.displayName?.text || "";
-        const site = p.websiteUri || "";
+    const todas = places.map((p) => {
+      const site = p.websiteUri || "";
+      const nome = p.displayName?.text || "";
+      return {
+        empresa: nome,
+        segmento,
+        cidade,
+        estado,
+        endereco: p.formattedAddress || "",
+        telefone: p.nationalPhoneNumber || p.internationalPhoneNumber || "",
+        email: "",
+        instagram: "",
+        site,
+        google_maps: p.googleMapsUri || "",
+        status: site ? "Com site" : "Sem site",
+        place_id: p.id || "",
+        origem: "Google Maps"
+      };
+    });
 
-        return {
-          empresa: nome,
-          segmento,
-          cidade,
-          estado,
-          endereco: p.formattedAddress || "",
-          telefone: p.nationalPhoneNumber || p.internationalPhoneNumber || "",
-          site,
-          google_maps: p.googleMapsUri || "",
-          status: site ? "Com site" : "Sem site",
-          place_id: p.id || ""
-        };
-      })
-      .filter((e) => !e.site);
+    const empresas = todas.filter(e => !e.site);
 
     return {
       statusCode: 200,
@@ -119,18 +99,15 @@ exports.handler = async function(event) {
         busca,
         total_encontradas: places.length,
         sem_site: empresas.length,
+        observacao: "O Google Maps/Places não fornece e-mails públicos. Use telefone/WhatsApp ou importe e-mails por CSV/TXT no painel.",
         empresas
       })
     };
-
   } catch (err) {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({
-        error: "Erro interno ao buscar empresas.",
-        details: err.message
-      })
+      body: JSON.stringify({ error: "Erro interno ao buscar empresas.", details: err.message })
     };
   }
 };
