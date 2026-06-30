@@ -1,28 +1,30 @@
-exports.handler = async function(event) {
-  const headers = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Content-Type": "application/json; charset=utf-8"
-  };
+module.exports = async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "{}" };
+  if (req.method === "OPTIONS") return res.status(200).json({});
 
-  if (event.httpMethod === "GET") {
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: "Função send-campaign online. Use POST para enviar e-mails." }) };
+  if (req.method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      message: "Função send-campaign online na Vercel. Use POST para enviar e-mails."
+    });
   }
 
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, headers, body: JSON.stringify({ error: "Método não permitido." }) };
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Método não permitido." });
   }
 
-  const apiKey = process.env.RESEND_API_KEY;
+  const apiKey = process.env.RESEND_API_KEY || process.env.RESEND_API;
+  console.log("send-campaign chamada", { method: req.method, hasResendKey: Boolean(apiKey) });
   if (!apiKey) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "RESEND_API_KEY não configurada no Netlify." }) };
+    return res.status(500).json({ error: "RESEND_API_KEY ou RESEND_API não configurada na Vercel." });
   }
 
   try {
-    const data = JSON.parse(event.body || "{}");
+    const data = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body || {});
     const subject = String(data.subject || data.assunto || "").trim();
     const message = String(data.message || data.mensagem || "").trim();
     const recipientsRaw = Array.isArray(data.recipients) ? data.recipients : [];
@@ -36,9 +38,9 @@ exports.handler = async function(event) {
       }))
       .filter(r => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email));
 
-    if (!subject) return { statusCode: 400, headers, body: JSON.stringify({ error: "Assunto obrigatório." }) };
-    if (!message) return { statusCode: 400, headers, body: JSON.stringify({ error: "Mensagem obrigatória." }) };
-    if (!recipients.length) return { statusCode: 400, headers, body: JSON.stringify({ error: "Nenhum e-mail válido informado." }) };
+    if (!subject) return res.status(400).json({ error: "Assunto obrigatório." });
+    if (!message) return res.status(400).json({ error: "Mensagem obrigatória." });
+    if (!recipients.length) return res.status(400).json({ error: "Nenhum e-mail válido informado." });
 
     let sent = 0;
     let failed = 0;
@@ -87,11 +89,11 @@ exports.handler = async function(event) {
       }
     }
 
-    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, sent, failed, results }) };
+    return res.status(200).json({ ok: true, sent, failed, results });
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: "Erro interno ao enviar campanha.", details: err.message }) };
+    return res.status(500).json({ error: "Erro interno ao enviar campanha.", details: err.message });
   }
-};
+}
 
 function escapeHtml(value) {
   return String(value || "")
