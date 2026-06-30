@@ -1,17 +1,28 @@
-export default async function handler(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
+exports.handler = async function(event) {
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    "Content-Type": "application/json; charset=utf-8"
+  };
 
-  if (req.method === "OPTIONS") return res.status(200).json({});
-  if (req.method === "GET") return res.status(200).json({ ok: true, message: "Função online na Vercel." });
-  if (req.method !== "POST") return res.status(405).json({ error: "Método não permitido." });
+  if (event.httpMethod === "OPTIONS") return { statusCode: 200, headers, body: "{}" };
+
+  if (event.httpMethod === "GET") {
+    return { statusCode: 200, headers, body: JSON.stringify({ ok: true, message: "Função send-campaign online. Use POST para enviar e-mails." }) };
+  }
+
+  if (event.httpMethod !== "POST") {
+    return { statusCode: 405, headers, body: JSON.stringify({ error: "Método não permitido." }) };
+  }
 
   const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "RESEND_API_KEY não configurada na Vercel." });
+  if (!apiKey) {
+    return { statusCode: 500, headers, body: JSON.stringify({ error: "RESEND_API_KEY não configurada no Netlify." }) };
+  }
 
   try {
-    const data = req.body || {};
+    const data = JSON.parse(event.body || "{}");
     const subject = String(data.subject || data.assunto || "").trim();
     const message = String(data.message || data.mensagem || "").trim();
     const recipientsRaw = Array.isArray(data.recipients) ? data.recipients : [];
@@ -24,59 +35,6 @@ export default async function handler(req, res) {
         empresa: String(r.empresa || r.nome || "sua empresa").trim()
       }))
       .filter(r => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email));
-
-    if (!subject) return res.status(400).json({ error: "Assunto obrigatório." });
-    if (!message) return res.status(400).json({ error: "Mensagem obrigatória." });
-    if (!recipients.length) return res.status(400).json({ error: "Nenhum e-mail válido informado." });
-
-    let sent = 0;
-    let failed = 0;
-    const results = [];
-
-    for (const r of recipients) {
-      const personalized = message
-        .replaceAll("{{empresa}}", r.empresa || "sua empresa")
-        .replaceAll("[LINK_DO_SITE]", "https://medeirosdigital.com");
-
-      const html = `
-        <div style="font-family:Arial,sans-serif;line-height:1.6;color:#111827;font-size:15px">
-          ${personalized.split("\n").map(line => `<p>${escapeHtml(line) || "&nbsp;"}</p>`).join("")}
-        </div>`;
-
-      const resp = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ from, to: [r.email], subject, html })
-      });
-
-      const result = await resp.json().catch(() => ({}));
-
-      if (!resp.ok) {
-        failed++;
-        results.push({ email: r.email, ok: false, error: result.message || result.error || result });
-      } else {
-        sent++;
-        results.push({ email: r.email, ok: true, id: result.id || "" });
-      }
-    }
-
-    return res.status(200).json({ ok: true, sent, failed, results });
-  } catch (err) {
-    return res.status(500).json({ error: "Erro interno ao enviar campanha.", details: err.message });
-  }
-}
-
-function escapeHtml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}      .filter(r => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r.email));
 
     if (!subject) return { statusCode: 400, headers, body: JSON.stringify({ error: "Assunto obrigatório." }) };
     if (!message) return { statusCode: 400, headers, body: JSON.stringify({ error: "Mensagem obrigatória." }) };
